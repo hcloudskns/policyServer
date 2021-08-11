@@ -10,7 +10,7 @@ public class TcpIpClient {
 	
 	
 	 
-	/*public static void main(String args[]) {
+	public static void main(String args[]) {
 		try {
 			//String serverIp = "192.168.101.110";
 			//String serverIp = "192.168.50.243";
@@ -37,7 +37,7 @@ public class TcpIpClient {
 			e.printStackTrace();  
 		}  
 	} // main
-*/}// class
+}// class
 
 class ClientSender extends Thread {
 	Socket socket;
@@ -80,10 +80,10 @@ class ClientSender extends Thread {
 				
 				out.write(buffer);
 				
-				sleep(5000);
+				//sleep(5000);
 				
 				
-			} catch(IOException | InterruptedException e) {
+			} catch(IOException e) {
 				e.printStackTrace();
 			}
 		}

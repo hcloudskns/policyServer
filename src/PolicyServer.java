@@ -28,8 +28,8 @@ public class PolicyServer {
 		Map<String, Client> clients = new HashMap<String, Client> ();
 		
 		try {
-				serverSocket = new ServerSocket(8888);
-				System.out.println("Polish 서버가 준비되었습니다.");
+				serverSocket = new ServerSocket(DBConst.policyServerPort);
+				System.out.println("Policy 서버가 준비되었습니다.");
 				
 				while(true){
 					
@@ -70,105 +70,107 @@ class ServerReceiver extends Thread {
 
 	public synchronized void run() {
 		while(in!=null) {
+		//if(in!=null) {
 			
 				Connection conn = null;
 				CallableStatement cstmt = null;
 				ResultSet rs =null;
 				int ret =0;
-				Socket  cliSocket = null;
+				//Socket  cliSocket = null;
+								
 				try {
 					
-					byte[] buffer = new byte[8096];
-					ret = in.read(buffer, 0, buffer.length);
-					int rowCount = 0;
-					//System.out.println(ret);
+						byte[] buffer = new byte[8096];
+						Arrays.fill(buffer,(byte)0);	
+						ret = in.read(buffer, 0, buffer.length);
+						if(ret > 0) {
 										
-					String policyType = "";
-					String nodeOrVM = "";
-					String policyCode = "";
-					String defaultYn = "";
-					String hostName = "";
-					String uuid = "";
-					String ipAddress = "";
-					String strData ="";
-					
-					strData = new String((Arrays.copyOfRange(buffer, 0, ret)),"UTF-8");
-										
-					JSONParser jParser = new JSONParser();
-					JSONObject jObject;
-																			
-					System.out.print("Received Data From Client: " + strData);
-					
-					jObject = (JSONObject)jParser.parse(strData);
-					policyType = (String)jObject.get("policy_type");
-					
-					/*PORTAL에서 정책 변경을 통보 받고 변경된 정책의  내용을 NODE와 VM에 전달 */
-					if(policyType.toUpperCase().equals("PORTAL_POLICY")) {
+							String policyType = "";
+							String nodeOrVM = "";
+							String policyCode = "";
+							String groupYn = "";
+							String policySeq = "";
+							String uuid = "";
+							String ipAddress = "";
+							String strData ="";
+							String hostName="";
 						
-						nodeOrVM = (String)jObject.get("node_or_vm");
-						policyCode = (String)jObject.get("policy_code");
-						defaultYn = (String)jObject.get("default_yn");
-						hostName = (String)jObject.get("host_name");
-						uuid = (String)jObject.get("uuid");
-						ipAddress = (String)jObject.get("ip_address");
+							strData = new String((Arrays.copyOfRange(buffer, 0, ret)),"UTF-8");
 						
-						Class.forName("org.mariadb.jdbc.Driver");	
-						conn = DriverManager.getConnection("jdbc:mariadb://192.168.101.110:3306/HCLOUD","root", "P@$$w0rd");
-					
-						cstmt = conn.prepareCall("{call SP_GET_" + policyCode.trim() +  "_POLICY_Q(?,?,?,?,?)}"); 
-					
-						cstmt.setString(1, nodeOrVM);					
-						cstmt.setString(2, defaultYn);
-						cstmt.setString(3, hostName);
-						cstmt.setString(4, uuid);
-						cstmt.setString(5, ipAddress);
-										
-						rs = cstmt.executeQuery();					
-						
-						while(rs.next()){
-							 
-							//cliSocket = new Socket(rs.getString("IP_ADDRESS"), 10001);
-							cliSocket = new Socket("localhost", 10001);
-							ClientSender cli = new ClientSender(cliSocket, rs.getString("MESSAGE"));
-							cli.start();
-															
-						}
-						
-					/* Agent로부터 REQUEST 받은 경우로  NODE와  VM에 대해 해당하는   Policy를 리턴한다. */
-					}else {
-						  
-						hostName = (String)jObject.get("host_name");
-						uuid = (String)jObject.get("uuid");
-						ipAddress = (String)jObject.get("ip_address");
-						policyType = (String)jObject.get("policy_type");
-						String[] policyArray = policyType.split("_");
-						
-						Class.forName("org.mariadb.jdbc.Driver");	
-						conn = DriverManager.getConnection("jdbc:mariadb://192.168.101.110:3306/HCLOUD","root", "P@$$w0rd");
-					
-						cstmt = conn.prepareCall("{call SP_GET_EACH_POLICY_Q(?,?,?,?)}"); 
-					
-						cstmt.setString(1, hostName);					
-						cstmt.setString(2, uuid);
-						cstmt.setString(3, ipAddress);
-						cstmt.setString(4, policyArray[0]);
-						
-						rs = cstmt.executeQuery();	
-						
-
-						while(rs.next()){							 
-							System.out.print("프로시저태운결과:" + rs.getString("MESSAGE"));
-							SendMessage(socket,rs.getString("MESSAGE"));									
-						}
-											
-					}
+							JSONParser jParser = new JSONParser();
+							JSONObject jObject;
 																				
-				}
+							System.out.println("Received Data From Client: " + strData);
+						
+							jObject = (JSONObject)jParser.parse(strData);
+							policyType = (String)jObject.get("policy_type");
+						
+							/*PORTAL에서 정책 변경을 통보 받고 변경된 정책의  내용을 NODE와 VM에 전달 */
+							if(policyType.toUpperCase().equals("PORTAL_POLICY")) {
+							
+								nodeOrVM = (String)jObject.get("node_or_vm");
+								policyCode = (String)jObject.get("policy_code");
+								groupYn = (String)jObject.get("group_Yn");
+								policySeq = (String)jObject.get("policy_Seq");
+								uuid = (String)jObject.get("uuid");
+								ipAddress = (String)jObject.get("ip_address");
+								
+								Class.forName("org.mariadb.jdbc.Driver");	
+								conn = DriverManager.getConnection(DBConst.DBConnectionStr,DBConst.userName, DBConst.userPwd);
+							
+								
+								cstmt = conn.prepareCall("{call SP_GET_" + policyCode.trim() +  "_POLICY_Q(?,?,?,?,?)}"); 
+							
+								cstmt.setString(1, nodeOrVM);					
+								cstmt.setString(2, groupYn);
+								cstmt.setString(3, policySeq);
+								cstmt.setString(4, uuid);
+								cstmt.setString(5, ipAddress);
+												
+								rs = cstmt.executeQuery();					
+							
+								while(rs.next()){
+									Socket cliSocket = new Socket(rs.getString("IP_ADDRESS"), 10001);
+									//Socket  cliSocket  = new Socket("localhost", 10001);
+									ClientSender cli = new ClientSender(cliSocket, rs.getString("MESSAGE"));
+									System.out.println(rs.getString("MESSAGE"));
+									cli.start();
+								}
+								/* Agent로부터 REQUEST 받은 경우로  NODE와  VM에 대해 해당하는   Policy를 리턴한다. */
+							} else {
+							  
+								hostName = (String)jObject.get("host_name");
+								uuid = (String)jObject.get("uuid");
+								ipAddress = (String)jObject.get("ip_address");
+								policyType = (String)jObject.get("policy_type");
+								String[] policyArray = policyType.split("_");
+								
+								Class.forName("org.mariadb.jdbc.Driver");	
+								conn = DriverManager.getConnection(DBConst.DBConnectionStr,DBConst.userName, DBConst.userPwd);
+							
+								cstmt = conn.prepareCall("{call SP_GET_EACH_POLICY_Q(?,?,?,?)}"); 
+							
+								cstmt.setString(1, hostName);					
+								cstmt.setString(2, uuid);
+								cstmt.setString(3, ipAddress);
+								cstmt.setString(4, policyArray[0]);
+								
+								rs = cstmt.executeQuery();	
+	
+								while(rs.next()){							 
+									System.out.println("프로시저태운결과:" + rs.getString("MESSAGE"));
+									SendMessage(socket,rs.getString("MESSAGE"));									
+								}
+												
+							} // end of else
+						}// end of if
+																				
+				}// end of try
 				catch(SocketException e) {
 					
 					try {
 						socket.close();
-						break;
+						//break;
 					} catch (IOException e1) {
 						// TODO Auto-generated catch block
 						e1.printStackTrace();
@@ -177,11 +179,11 @@ class ServerReceiver extends Thread {
 				catch (ParseException e) {
 					// TODO Auto-generated catch block
 					e.printStackTrace();
-					break;
+					//break;
 				}catch (IOException e) {
 					// TODO Auto-generated catch block
 					e.printStackTrace();
-					break;
+					//break;
 				/*}catch (SQLException e) {
 					// TODO Auto-generated catch block
 					e.printStackTrace();
@@ -192,7 +194,7 @@ class ServerReceiver extends Thread {
 					break;*/
 				}catch(Exception e) {
 					e.printStackTrace();
-					break;
+					//break;
 				}finally {
 					if(conn != null)
 						try {
@@ -223,7 +225,7 @@ class ServerReceiver extends Thread {
 				byte[] buffer = new byte[msg.getBytes().length];
 				buffer = msg.getBytes("utf-8");
 			
-				System.out.print(msg);
+				System.out.println(msg);
 				out.write(buffer);
 			
 		} catch (IOException e) {
@@ -231,7 +233,7 @@ class ServerReceiver extends Thread {
 			e.printStackTrace();
 		}	
 	}
-}
+} 
 
 
 
