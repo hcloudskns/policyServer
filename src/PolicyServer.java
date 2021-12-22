@@ -88,7 +88,7 @@ class ServerReceiver extends Thread {
 
 		try
 		{
-			Class.forName("org.mariadb.jdbc.Driver");
+			Class.forName(DBConst.driver);
 			conn = DriverManager.getConnection(DBConst.DBConnectionStr,DBConst.userName, DBConst.userPwd);
 						
 			strSQL = "insert into TB_TR_LOG(DEVICE_TYPE, UUID, DEVICE_NAME,LOG_MESSAGE,LOG_DATE) values(?, ?, ?, ?, ?)";
@@ -123,6 +123,7 @@ class ServerReceiver extends Thread {
 		}
 	}
 
+	@SuppressWarnings("resource")
 	public synchronized void run() {
 
 		if(in!=null) {
@@ -139,9 +140,10 @@ class ServerReceiver extends Thread {
 				int msgLength = 0;
 				String strBytes = "";
 				String sendMsg = "";
+				String  strMsgCheck = "";
 								
 				try {
-						byte[] buffer = new byte[8096];
+						byte[] buffer = new byte[16192];
 						Arrays.fill(buffer,(byte)0);	
 						ret = in.read(buffer, 0, buffer.length);
 						if(ret > 0) {
@@ -152,12 +154,18 @@ class ServerReceiver extends Thread {
 							String groupYn = "";
 							String policySeq = "";
 							String uuid = "";
-							String ipAddress = "";
+							String groupId = "";
+							String ipAddress ="";
 							String strData ="";
 							String hostName="";
 						
 							strData = new String((Arrays.copyOfRange(buffer, 0, ret)),"UTF-8");
 						
+							/*정책 서버의 상태 체크하는 부분*/
+							if(strData.toUpperCase().equals("0000006STATUS")){
+								strData = "0000024{\"policy_type\":\"HEALTH_CHECK\"}";
+							}
+							
 							JSONParser jParser = new JSONParser();
 							JSONObject jObject;
 																				
@@ -171,32 +179,74 @@ class ServerReceiver extends Thread {
 							else if(jObject.containsKey("Policy_type"))
 									policyType = (String)jObject.get("Policy_type");
 						
-							/*PORTAL에서 정책 변경을 통보 받고 변경된 정책의  내용을 NODE와 VM에 전달 */
-							if(policyType.toUpperCase().equals("PORTAL_POLICY")) {
-							
+							if(policyType.toUpperCase().equals("HEALTH_CHECK")) {
+								SendMessage(socket, "0000007RUNNING");
+							}else if(policyType.toUpperCase().equals("PORTAL_DEFAULT_POLICY")){
+								/*PORTAL에서 VM을 그룹에 넣고 뺄때 마다  기본 정책 전송 */
 								nodeOrVM = (String)jObject.get("node_or_vm");
 								policyCode = (String)jObject.get("policy_code");
-								groupYn = (String)jObject.get("group_Yn");
-								policySeq = (String)jObject.get("policy_Seq");
+								groupYn = (String)jObject.get("group_yn");
+								policySeq = (String)jObject.get("policy_seq");
+								uuid = (String)jObject.get("uuid");								
+								ipAddress = (String)jObject.get("ip_address");
+								
+								Class.forName(DBConst.driver);
+								conn = DriverManager.getConnection(DBConst.DBConnectionStr,DBConst.userName, DBConst.userPwd);
+																
+								cstmt = conn.prepareCall("{call SP_GET_DEFAULT_POLICY_BY_PORTAL(?)}");
+								cstmt.setString(1,policyCode);
+								
+								rs = cstmt.executeQuery();
+								
+								while(rs.next()){
+									strMsgCheck = rs.getString("MESSAGE");
+								}
+								
+								msgLength = strMsgCheck.getBytes("utf-8").length;
+								strBytes = String.format("%07d", msgLength);
+								
+								sendMsg = strBytes + strMsgCheck;
+								
+								System.out.println("MESSAGE:" + sendMsg);
+								//insertLog(nodeOrVM,uuid,"", "[정책조회 결과(Portal 리퀘스트]:"+sendMsg);
+								
+								Socket cliSocket =  null;
+								if(DBConst.mode.equals("TEST")) {
+									cliSocket  = new Socket(DBConst.testVM, DBConst.PolicyReceiverPort);
+								}else {
+									//insertLog(nodeOrVM,uuid,"", "[정책조회 결과(Portal 리퀘스트]: 소켓생성전");
+									cliSocket  = new Socket(ipAddress, DBConst.PolicyReceiverPort);
+									//insertLog(nodeOrVM,uuid,"", "[정책조회 결과(Portal 리퀘스트]: 소켓생성후");
+								}
+								ClientSender cli = new ClientSender(cliSocket, sendMsg);				
+								//insertLog(nodeOrVM,uuid,"", "[정책조회 결과(Portal 리퀘스트]: 보내기전");
+								cli.start();
+								//insertLog(nodeOrVM,uuid,"", "[정책전송완료(Portal->Policy->VM]):"+sendMsg);
+																
+							}else if(policyType.toUpperCase().equals("PORTAL_POLICY")) {
+								/*PORTAL에서 정책 전송 */
+								nodeOrVM = (String)jObject.get("node_or_vm");
+								policyCode = (String)jObject.get("policy_code");
+								groupYn = (String)jObject.get("group_yn");
+								policySeq = (String)jObject.get("policy_seq");
 								uuid = (String)jObject.get("uuid");
-
-								Class.forName("org.mariadb.jdbc.Driver");
+								groupId = (String)jObject.get("group_id");
+																
+								Class.forName(DBConst.driver);
 								conn = DriverManager.getConnection(DBConst.DBConnectionStr,DBConst.userName, DBConst.userPwd);
 								
 								cstmt = conn.prepareCall("{call SP_GET_" + policyCode.trim() +  "_POLICY_Q(?,?,?,?,?)}"); 
 							
-								cstmt.setString(1, nodeOrVM);					
-								
+								cstmt.setString(1, nodeOrVM);													
 								cstmt.setString(2, groupYn);
 								cstmt.setString(3, policySeq);
 								cstmt.setString(4, uuid);
-								cstmt.setString(5, ipAddress);
+								cstmt.setString(5, groupId);
 												
 								rs = cstmt.executeQuery();					
 							
 								while(rs.next()){
-									
-									String  strMsgCheck = "";
+																		
 									if(policyCode.toUpperCase().equals("PATTERN")) {										
 										if(rs.getString("MESSAGE").substring(rs.getString("MESSAGE").length()-2,rs.getString("MESSAGE").length()).equals("&&"))
 											strMsgCheck = StringUtils.removeEnd(rs.getString("MESSAGE"),"&&");
@@ -228,7 +278,101 @@ class ServerReceiver extends Thread {
 									insertLog(nodeOrVM,uuid,"", "[정책전송완료(Portal->Policy->VM]):"+sendMsg);	
 								}
 								/* Agent로부터 REQUEST 받은 경우로  NODE와  VM에 대해 해당하는   Policy를 리턴한다. */
-							} else {
+							}else if(policyType.toUpperCase().equals("PORTAL_NW_POLICY")){
+								
+								Class.forName(DBConst.driver);	
+								conn = DriverManager.getConnection(DBConst.DBConnectionStr,DBConst.userName, DBConst.userPwd);
+								
+								cstmt = conn.prepareCall("{call SP_NETWORK_POLICY_TO_MGMT_Q()}"); 								
+																
+								rs = cstmt.executeQuery();
+								
+								if(rs.next()) {
+									
+									System.out.println("프로시저태운결과:" + rs.getString("MESSAGE"));
+									insertLog("","","", "[정책조회 결과(네트워크 Latancy)]:"+rs.getString("MESSAGE"));
+									
+									strMsgCheck = rs.getString("MESSAGE");
+									msgLength = strMsgCheck.getBytes("utf-8").length;
+									strBytes=String.format("%07d", msgLength);
+									sendMsg=strBytes + strMsgCheck;
+									
+									Socket cliSocket =  null;
+
+									
+									if(DBConst.mode.equals("TEST")) {
+										cliSocket  = new Socket(DBConst.testNewrorkLatencyServer, DBConst.testNetworkLatencyPort);
+									}else {
+										//insertLog(nodeOrVM,uuid,"", "[정책조회 결과(Portal 리퀘스트]: 소켓생성전");
+										cliSocket  = new Socket(DBConst.NetworkLatencyServer, DBConst.NetworkLatencyPort);
+										//insertLog(nodeOrVM,uuid,"", "[정책조회 결과(Portal 리퀘스트]: 소켓생성후");
+									}
+									ClientSender cli = new ClientSender(cliSocket, sendMsg);				
+									//insertLog(nodeOrVM,uuid,"", "[정책조회 결과(Portal 리퀘스트]: 보내기전");
+									cli.start();
+									insertLog("","","", "[정책전송완료(네트워크 Latancy)]:"+sendMsg);
+									
+								}else {										
+										cstmt = conn.prepareCall("{call SP_GET_DEFAULT_POLICY(?)}");
+										cstmt.setString(1,"NETWORK");
+										
+										rs = cstmt.executeQuery();
+										if(rs.next()) {
+											System.out.println("디폴트 네트워크 거점 프로시저태운결과:" + rs.getString("MESSAGE"));
+											insertLog("","","", "[정책조회 결과 Default(네트워크 거점)]:"+sendMsg);
+											msgLength = rs.getString("MESSAGE").getBytes("utf-8").length;
+											strBytes = String.format("%07d", msgLength);
+											sendMsg = strBytes + rs.getString("MESSAGE");
+											System.out.println("MESSAGE:" + sendMsg);
+											SendMessage(socket,sendMsg);
+											insertLog("","","", "[정책전송완료 Default(네트워크 거점)]:"+sendMsg);
+											cstmt.close();
+										}
+								}
+								
+							}else if(policyType.toUpperCase().equals("NW_POLICY")){
+								/*네트워크 거점 정책을 물어볼때 */
+								Class.forName(DBConst.driver);	
+								conn = DriverManager.getConnection(DBConst.DBConnectionStr,DBConst.userName, DBConst.userPwd);
+								
+								cstmt = conn.prepareCall("{call SP_GET_NETWORK_POLICY_Q()}"); 								
+																
+								rs = cstmt.executeQuery();
+								
+								if(rs.next()) {
+									
+									System.out.println("프로시저태운결과:" + rs.getString("MESSAGE"));
+									insertLog("","","", "[정책조회 결과(네트워크 Latancy)]:"+sendMsg);
+									
+									strMsgCheck = rs.getString("MESSAGE");
+									msgLength = strMsgCheck.getBytes("utf-8").length;
+									strBytes=String.format("%07d", msgLength);
+									sendMsg=strBytes + strMsgCheck;
+									
+									System.out.println("MESSAGE:" + sendMsg);
+									SendMessage(socket,sendMsg);
+									insertLog("","","", "[정책전송완료(네트워크 Latancy)]:"+sendMsg);
+									
+								}else {										
+										cstmt = conn.prepareCall("{call SP_GET_DEFAULT_POLICY(?)}");
+										cstmt.setString(1,"NETWORK");
+										
+										rs = cstmt.executeQuery();
+										if(rs.next()) {
+											System.out.println("디폴트 네트워크 거점 프로시저태운결과:" + rs.getString("MESSAGE"));
+											insertLog("","","", "[정책조회 결과 Default(네트워크 거점)]:"+sendMsg);
+											msgLength = rs.getString("MESSAGE").getBytes("utf-8").length;
+											strBytes = String.format("%07d", msgLength);
+											sendMsg = strBytes + rs.getString("MESSAGE");
+											System.out.println("MESSAGE:" + sendMsg);
+											SendMessage(socket,sendMsg);
+											insertLog("","","", "[정책전송완료 Default(네트워크 거점)]:"+sendMsg);
+											cstmt.close();
+										}
+								}
+							
+								
+							}else { /*CPU, MEM, PROCESS, PATTERN 정책리턴*/
 							  
 								hostName = (String)jObject.get("host_name");
 								uuid = (String)jObject.get("uuid");
@@ -242,10 +386,12 @@ class ServerReceiver extends Thread {
 								
 								String[] policyArray = policyType.split("_");
 								
-									Class.forName("org.mariadb.jdbc.Driver");	
+									Class.forName(DBConst.driver);	
 									conn = DriverManager.getConnection(DBConst.DBConnectionStr,DBConst.userName, DBConst.userPwd);
 									
-									/*VM의 전원을 켜자*/
+									/*	VM의 전원을 켜자*. 정책을 물어본다는것은 VM이 켜졌다는 것을 의미... 
+									 *  그러나 임시 방편적임....  
+									 */
 									PreparedStatement stmt = null;
 									String sql = "";
 
@@ -279,7 +425,7 @@ class ServerReceiver extends Thread {
 										insertLog(nodeOrVM,uuid,"", "[정책전송완료(VM->Policy->VM)]:"+sendMsg);
 										
 									}else {
-											Class.forName("org.mariadb.jdbc.Driver");	
+											Class.forName(DBConst.driver);	
 											//conn = DriverManager.getConnection(DBConst.DBConnectionStr,DBConst.userName, DBConst.userPwd);
 											cstmt2 = conn.prepareCall("{call SP_GET_DEFAULT_POLICY(?)}"); 										
 											cstmt2.setString(1,policyArray[0]);																									
@@ -316,16 +462,7 @@ class ServerReceiver extends Thread {
 					//break;
 				}catch (IOException e) {
 					// TODO Auto-generated catch block
-					e.printStackTrace();
-					//break;
-				/*}catch (SQLException e) {
-					// TODO Auto-generated catch block
-					e.printStackTrace();
-					break;
-				}catch (ClassNotFoundException e) {
-					// TODO Auto-generated catch block
-					e.printStackTrace();
-					break;*/
+					e.printStackTrace();					
 				}catch(Exception e) {
 					e.printStackTrace();
 					//break;
@@ -342,6 +479,13 @@ class ServerReceiver extends Thread {
 							cstmt.close();
 						} catch (SQLException e) {
 						// TODO Auto-generated catch block
+							e.printStackTrace();
+						}
+					if(in != null)
+						try {
+							in.close();
+						} catch (IOException e) {
+							// TODO Auto-generated catch block
 							e.printStackTrace();
 						}
 				}
